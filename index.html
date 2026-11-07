@@ -50,7 +50,7 @@ footer strong{font-weight:850}footer span{font-size:12px;color:#687386}
 <nav class="tabs"><button class="tab active" data-tab="translator">Traductor</button><button class="tab" data-tab="learn">Aprender</button></nav>
 <section class="panel active" id="translator">
 <div class="langs"><div class="lang" id="fromLabel">Español</div><button class="swap" id="swap" aria-label="Invertir idiomas">⇄</button><div class="lang" id="toLabel">Criollo<br>haitiano</div></div>
-<button class="primary" id="talk">🎙 Presiona para hablar</button>
+<button class="primary" id="talk">Presiona para hablar</button>
 <div class="toggleline"><div><strong>Interpretación continua</strong><div class="small">Escucha turnos de conversación y traduce al detectar pausas.</div></div><button class="switch" id="continuous" aria-label="Activar interpretación continua" aria-pressed="false"></button></div>
 <div class="small" id="modeHelp">Pulsa para hablar. El navegador solicitará permiso para usar el micrófono.</div>
 <div class="card"><div class="kicker">TEXTO DETECTADO</div><div class="result empty" id="heard">Aquí aparecerá lo que diga la persona.</div></div>
@@ -77,40 +77,72 @@ const ENTRIES=[{"id":"ASV-0001","category":"general_greetings","es_DO":"Hola.","
 let direction=0, recognition=null, listening=false, continuous=false, lastTranslation="", restartTimer=null;
 const $=id=>document.getElementById(id);
 function setStatus(t){$("status").textContent=t}
-function sourceLang(){return direction===0?"es-DO":"ht-HT"}
-function targetLang(){return direction===0?"ht-HT":"es-DO"}
+function sourceLang(){return direction===0?"es-ES":"ht-HT"}
+function targetLang(){return direction===0?"ht-HT":"es-ES"}
 function sourceField(){return direction===0?"es_DO":"ht_HT"}
 function targetField(){return direction===0?"ht_HT":"es_DO"}
 function labels(){ $("fromLabel").innerHTML=direction===0?"Español":"Criollo<br>haitiano";$("toLabel").innerHTML=direction===0?"Criollo<br>haitiano":"Español"}
-function norm(s){return (s||"").toLocaleLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[¿?¡!.,;:]/g,"").trim().replace(/\s+/g," ")}
-function translate(text){
- const q=norm(text); if(!q)return null;
- return ENTRIES.find(e=>norm(e[sourceField()])===q)||null;
+function norm(s){return (s||"").toLocaleLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[¿?¡!.,;:¡!"'()]/g,"").replace(/\s+/g," ").trim()}
+function editDistance(a,b){
+ const m=a.length,n=b.length;if(Math.abs(m-n)>3)return 99;
+ let prev=Array.from({length:n+1},(_,i)=>i),curr=new Array(n+1);
+ for(let i=1;i<=m;i++){curr[0]=i;let rowMin=curr[0];for(let j=1;j<=n;j++){curr[j]=Math.min(curr[j-1]+1,prev[j]+1,prev[j-1]+(a[i-1]===b[j-1]?0:1));rowMin=Math.min(rowMin,curr[j]);}if(rowMin>3)return 99;[prev,curr]=[curr,prev];}
+ return prev[n];
 }
-function renderTranslation(text){
+function findEntry(text){
+ const q=norm(text);if(!q)return null;
+ const field=sourceField();
+ let exact=ENTRIES.find(e=>norm(e[field])===q);if(exact)return exact;
+ // Common speech-to-text spelling variation for Spanish greetings.
+ const aliases={"ola":"hola","buenos dia":"buenos dias","buen dia":"buenos dias"};
+ if(direction===0&&aliases[q]){exact=ENTRIES.find(e=>norm(e[field])===aliases[q]);if(exact)return exact;}
+ // Tolerate a small transcription error without inventing a translation.
+ let best=null,bestScore=0,secondScore=0;
+ for(const e of ENTRIES){
+  const candidate=norm(e[field]);if(!candidate)continue;
+  const maxLen=Math.max(q.length,candidate.length);if(Math.abs(q.length-candidate.length)>2)continue;
+  const dist=editDistance(q,candidate);const score=1-dist/maxLen;
+  if(score>bestScore){secondScore=bestScore;bestScore=score;best=e;}else if(score>secondScore){secondScore=score;}
+ }
+ return best&&bestScore>=0.88&&(bestScore-secondScore)>=0.025?best:null;
+}
+function translate(text,alternatives=[]){
+ const candidates=[text,...alternatives].filter(Boolean);
+ for(const candidate of candidates){const found=findEntry(candidate);if(found)return found;}
+ return null;
+}
+function renderTranslation(text,alternatives=[]){
  $("heard").textContent=text; $("heard").classList.remove("empty");
- const entry=translate(text);
+ const entry=translate(text,alternatives);
  if(entry){lastTranslation=entry[targetField()];$("translated").textContent=lastTranslation;$("translated").classList.remove("empty");$("play").disabled=false;$("copy").disabled=false;setStatus("Expresión encontrada en el repertorio");if(continuous)speak(lastTranslation,targetLang());}
- else {lastTranslation="";$("translated").textContent="Esta expresión no está incluida todavía en el repertorio. No se generó una traducción."; $("translated").classList.add("empty");$("play").disabled=true;$("copy").disabled=true;setStatus("No hay coincidencia en el repertorio");}
+ else {lastTranslation="";$("translated").textContent="No encontramos una coincidencia clara. Intenta repetir la expresión más despacio.";$("translated").classList.add("empty");$("play").disabled=true;$("copy").disabled=true;setStatus("No se encontró una coincidencia clara");}
 }
 function getRecognition(){
  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
  if(!SR){setStatus("Este navegador no ofrece reconocimiento de voz. Prueba Chrome.");return null;}
- const r=new SR();r.lang=sourceLang();r.continuous=continuous;r.interimResults=false;r.maxAlternatives=1;
- r.onstart=()=>{listening=true; $("talk").textContent="■ Detener escucha";setStatus(continuous?"Escucha continua activa":"Escuchando…");};
- r.onresult=e=>{const res=e.results[e.results.length-1];if(res.isFinal){renderTranslation(res[0].transcript);}};
+ const r=new SR();r.lang=sourceLang();r.continuous=continuous;r.interimResults=false;r.maxAlternatives=5;
+ r.onstart=()=>{listening=true;$("talk").textContent="■ Detener escucha";setStatus(continuous?"Escucha continua activa":"Escuchando…");};
+ r.onresult=e=>{const res=e.results[e.results.length-1];if(res.isFinal){const alts=[];for(let i=1;i<res.length;i++)alts.push(res[i].transcript);renderTranslation(res[0].transcript,alts);}};
  r.onerror=e=>{setStatus(e.error==="not-allowed"?"Permite el acceso al micrófono en el navegador.":"No se pudo reconocer la voz: "+e.error);};
- r.onend=()=>{listening=false;$("talk").textContent="🎙 Presiona para hablar";if(continuous){clearTimeout(restartTimer);restartTimer=setTimeout(startListening,450);}else if($("status").textContent==="Escuchando…")setStatus("Preparado para conversar");};
+ r.onend=()=>{listening=false;$("talk").textContent="Presiona para hablar";if(continuous){clearTimeout(restartTimer);restartTimer=setTimeout(startListening,450);}else if($("status").textContent==="Escuchando…")setStatus("Preparado para conversar");};
  return r;
 }
 function startListening(){if(listening)return;recognition=getRecognition();if(!recognition)return;try{recognition.start()}catch(e){setStatus("El micrófono ya está activo.");}}
-function stopListening(){continuous=false;$("continuous").classList.remove("on");$("continuous").setAttribute("aria-pressed","false");clearTimeout(restartTimer);if(recognition){recognition.onend=null;try{recognition.stop()}catch(e){}recognition=null;}listening=false;$("talk").textContent="🎙 Presiona para hablar";setStatus("Escucha detenida");}
+function stopListening(){continuous=false;$("continuous").classList.remove("on");$("continuous").setAttribute("aria-pressed","false");clearTimeout(restartTimer);if(recognition){recognition.onend=null;try{recognition.stop()}catch(e){}recognition=null;}listening=false;$("talk").textContent="Presiona para hablar";setStatus("Escucha detenida");}
 function speak(text,lang){
  if(!("speechSynthesis" in window)){setStatus("Este navegador no admite reproducción de voz.");return;}
- speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);u.lang=lang;
- const voices=speechSynthesis.getVoices();const voice=voices.find(v=>v.lang.toLowerCase()===lang.toLowerCase())||voices.find(v=>v.lang.toLowerCase().startsWith(lang.split("-")[0]));
- if(voice)u.voice=voice;
- u.onstart=()=>setStatus("Reproduciendo interpretación");u.onerror=()=>setStatus("No se pudo reproducir la voz en este idioma en el dispositivo.");
+ speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(text);const voices=speechSynthesis.getVoices();
+ let voice=null;
+ if(lang.toLowerCase().startsWith("ht")){
+  voice=voices.find(v=>v.lang.toLowerCase()==="ht-ht")||voices.find(v=>v.lang.toLowerCase().startsWith("ht"));
+  if(!voice)voice=voices.find(v=>v.lang.toLowerCase()==="fr-fr")||voices.find(v=>v.lang.toLowerCase().startsWith("fr-ca"))||voices.find(v=>v.lang.toLowerCase().startsWith("fr"));
+  u.lang=voice?voice.lang:"fr-FR";u.rate=0.90;u.pitch=1.0;
+ }else{
+  voice=voices.find(v=>v.lang.toLowerCase()==="es-es")||voices.find(v=>v.lang.toLowerCase().startsWith("es"));
+  u.lang=voice?voice.lang:"es-ES";u.rate=0.96;u.pitch=1.0;
+ }
+ if(voice)u.voice=voice;u.volume=1;
+ u.onstart=()=>setStatus("Reproduciendo audio");u.onerror=()=>setStatus("No se pudo reproducir la voz en este idioma en el dispositivo.");
  speechSynthesis.speak(u);
 }
 $("talk").onclick=()=>{if(listening&&!continuous){try{recognition.stop()}catch(e){}return;}if(continuous){stopListening();return;}startListening();};
