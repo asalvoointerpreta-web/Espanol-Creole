@@ -4,6 +4,7 @@
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#861b25">
 <title>ASALVoo Interpreta</title>
+<meta name="description" content="Asistencia lingüística Español dominicano y kreyòl ayisyen. Catálogo bilingüe con expresiones en revisión identificadas.">
 <style>
 :root{--wine:#861b25;--wine2:#64121b;--ink:#202633;--muted:#687386;--line:#e1e4eb;--soft:#f5f6fa;--lav:#eef1fb;--green:#178c62}
 *{box-sizing:border-box}body{margin:0;background:#f6f7fa;color:var(--ink);font-family:Inter,system-ui,-apple-system,"Segoe UI",sans-serif;padding:18px 12px 34px}
@@ -44,12 +45,12 @@ footer{text-align:center;color:#8b92a0;font-size:12px;padding:18px 0 2px}
 <div class="small" id="modeHelp">Pulsa para hablar. El navegador solicitará permiso para usar el micrófono.</div>
 <div class="card"><div class="kicker">TEXTO DETECTADO</div><div class="result empty" id="heard">Aquí aparecerá lo que diga la persona.</div></div>
 <div class="card"><div class="kicker">TRADUCCIÓN DISPONIBLE</div><div class="result empty" id="translated">La traducción aparecerá aquí.</div><div class="actions"><button class="secondary" id="play" disabled>▶ Escuchar traducción</button><button class="secondary" id="copy" disabled>Copiar</button></div></div>
-<div class="notice" id="limit">Esta versión inicial utiliza el repertorio de 1,061 expresiones incorporado. Si una frase no está en el repertorio, lo indicará sin inventar una traducción. La traducción libre y la interpretación continua completa requieren conectar un motor de reconocimiento y traducción compatible con criollo haitiano.</div>
+<div class="notice" id="limit">El traductor utiliza las 1,061 expresiones base. El catálogo ampliado incluye vocablos y frases en revisión lingüística, que no se presentan como traducciones confirmadas. La traducción libre requiere conectar un motor externo compatible con kreyòl.</div>
 </section>
 <section class="panel" id="learn">
 <div class="kicker">EXPLORA EXPRESIONES</div><input id="search" placeholder="Buscar en español o criollo haitiano…">
 <div style="height:10px"></div><select id="category"><option value="">Todas las categorías</option></select>
-<div class="small" id="count" style="margin:10px 2px"></div><div id="phrases"></div>
+<div class="small" id="count" style="margin:10px 2px"></div><div class="notice">Las expresiones nuevas aparecen identificadas como <b>candidatas en revisión</b>. No se usan en la interpretación hasta completar su validación lingüística.</div><div id="phrases"></div>
 </section>
 <footer>ASALVoo · Protección creativa para gente inteligente.</footer>
 </main>
@@ -66,12 +67,7 @@ function labels(){ $("fromLabel").innerHTML=direction===0?"Español":"Criollo<br
 function norm(s){return (s||"").toLocaleLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g,"").replace(/[¿?¡!.,;:]/g,"").trim().replace(/\s+/g," ")}
 function translate(text){
  const q=norm(text); if(!q)return null;
- let exact=ENTRIES.find(e=>norm(e[sourceField()])===q);
- if(exact)return exact;
- // phrase contains full spoken utterance only for small punctuation differences
- let candidates=ENTRIES.filter(e=>norm(e[sourceField()]).length>5 && (q.includes(norm(e[sourceField()]))||norm(e[sourceField()]).includes(q)));
- candidates.sort((a,b)=>Math.abs(norm(a[sourceField()]).length-q.length)-Math.abs(norm(b[sourceField()]).length-q.length));
- return candidates[0]||null;
+ return ENTRIES.find(e=>norm(e[sourceField()])===q)||null;
 }
 function renderTranslation(text){
  $("heard").textContent=text; $("heard").classList.remove("empty");
@@ -105,7 +101,32 @@ $("swap").onclick=()=>{const was=continuous;if(was)stopListening();direction=1-d
 $("play").onclick=()=>{if(lastTranslation)speak(lastTranslation,targetLang())};
 $("copy").onclick=async()=>{try{await navigator.clipboard.writeText(lastTranslation);setStatus("Traducción copiada")}catch(e){setStatus("No se pudo copiar en este navegador")}};
 document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>{document.querySelectorAll(".tab").forEach(x=>x.classList.toggle("active",x===b));document.querySelectorAll(".panel").forEach(x=>x.classList.toggle("active",x.id===b.dataset.tab));if(continuous)stopListening();});
-const cats=[...new Set(ENTRIES.map(e=>e.category))].sort();cats.forEach(c=>{const o=document.createElement("option");o.value=c;o.textContent=c.replace(/_/g," ");$("category").appendChild(o)});
-function showPhrases(){const q=norm($("search").value),cat=$("category").value;let arr=ENTRIES.filter(e=>(!cat||e.category===cat)&&(!q||norm(e.es_DO).includes(q)||norm(e.ht_HT).includes(q)));$("count").textContent=arr.length+" expresiones";$("phrases").innerHTML="";arr.slice(0,100).forEach(e=>{const d=document.createElement("div");d.className="phrase";const a=document.createElement("div");a.className="es";a.textContent=e.es_DO;const b=document.createElement("div");b.className="ht";b.textContent=e.ht_HT;const p=document.createElement("button");p.className="secondary";p.textContent="▶ Escuchar criollo";p.style.marginTop="9px";p.onclick=()=>speak(e.ht_HT,"ht-HT");d.append(a,b,p);$("phrases").appendChild(d)});if(arr.length>100){const n=document.createElement("div");n.className="small";n.textContent="Mostrando las primeras 100 coincidencias. Afina la búsqueda."; $("phrases").appendChild(n)}}
-$("search").oninput=showPhrases;$("category").onchange=showPhrases;labels();showPhrases();
+let CANDIDATES=[];
+async function loadCandidates(){
+ try{
+  const response=await fetch('./lexicon-candidates.json',{cache:'no-store'});
+  if(!response.ok)throw new Error('HTTP '+response.status);
+  const data=await response.json();
+  CANDIDATES=(Array.isArray(data.records)?data.records:[]).map((e,i)=>({
+   id:e.id||('ASV-LX-'+String(i+1062).padStart(6,'0')),
+   category:e.category||'vocabulary', es_DO:e.es_DO||'', ht_HT:e.ht_HT||'',
+   intent:e.intent||'vocabulary_term', notes:e.notes||''
+  })).filter(e=>e.es_DO.trim()&&e.ht_HT.trim());
+  const seen=new Set(ENTRIES.map(e=>norm(e.es_DO)+'|'+norm(e.ht_HT)));
+  CANDIDATES.forEach(e=>{const key=norm(e.es_DO)+'|'+norm(e.ht_HT);if(!seen.has(key)){ENTRIES.push(e);seen.add(key)}});
+  const allCats=[...new Set(ENTRIES.map(e=>e.category))].sort();
+  allCats.forEach(c=>{const o=document.createElement('option');o.value=c;o.textContent=c.replace(/_/g,' ');$('category').appendChild(o)});
+  setStatus('Repertorio completo cargado: '+ENTRIES.length.toLocaleString('es-DO')+' expresiones');
+ }catch(e){console.error('No se pudo cargar el repertorio ampliado',e);setStatus('No se pudo cargar el catálogo ampliado. Verifica que lexicon-candidates.json esté junto a index.html.');}
+ showPhrases();
+}
+function showPhrases(){
+ const q=norm($('search').value),cat=$('category').value;
+ const arr=ENTRIES.filter(e=>(!cat||e.category===cat)&&(!q||norm(e.es_DO).includes(q)||norm(e.ht_HT).includes(q)));
+ $('count').textContent=arr.length.toLocaleString('es-DO')+' expresiones disponibles';$('phrases').innerHTML='';
+ arr.slice(0,100).forEach(e=>{const d=document.createElement('div');d.className='phrase';const a=document.createElement('div');a.className='es';a.textContent=e.es_DO;const b=document.createElement('div');b.className='ht';b.textContent=e.ht_HT;const p=document.createElement('button');p.className='secondary';p.textContent='▶ Escuchar criollo';p.style.marginTop='9px';p.onclick=()=>speak(e.ht_HT,'ht-HT');d.append(a,b,p);$('phrases').appendChild(d)});
+ if(arr.length>100){const n=document.createElement('div');n.className='small';n.textContent='Mostrando las primeras 100 coincidencias. Afina la búsqueda.';$('phrases').appendChild(n)}
+}
+
+$("search").oninput=showPhrases;$("category").onchange=showPhrases;labels();loadCandidates();
 </script></body></html>
